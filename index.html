@@ -44,10 +44,10 @@
   /* ---------- HUD ---------- */
   #hud { display:none; flex-direction:column; gap:8px; padding:12px 4px 8px; }
   #hud.show { display:flex; }
-  .hud-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .hud-row { display:flex; align-items:center; justify-content:space-between; gap:6px; }
   .chip {
     background:rgba(255,255,255,.16); border:2px solid rgba(255,255,255,.25);
-    border-radius:999px; padding:6px 16px; font-weight:600; font-size:16px;
+    border-radius:999px; padding:5px 10px; font-weight:600; font-size:14px;
     backdrop-filter:blur(6px); box-shadow:0 4px 14px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.25);
     white-space:nowrap;
   }
@@ -55,7 +55,8 @@
   #movesChip.low { background:rgba(244,63,94,.45); border-color:rgba(255,255,255,.4); animation:pulseChip 1s ease-in-out infinite; }
   @keyframes pulseChip { 0%,100%{transform:scale(1);} 50%{transform:scale(1.06);} }
   .icon-btn {
-    width:44px; height:44px; border-radius:14px; border:2px solid rgba(255,255,255,.25);
+    width:40px; height:40px; min-width:40px; padding:0;
+    border-radius:13px; border:2px solid rgba(255,255,255,.25);
     background:rgba(255,255,255,.16); color:#fff; cursor:pointer; flex:0 0 auto;
     display:flex; align-items:center; justify-content:center;
     box-shadow:0 4px 14px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.25);
@@ -64,6 +65,12 @@
   .icon-btn:active { transform:scale(.92); }
   .icon-btn svg { width:22px; height:22px; }
 
+  @media (max-width: 350px) {
+    .chip { font-size:12px; padding:4px 8px; }
+    .icon-btn { width:36px; height:36px; min-width:36px; }
+    .icon-btn svg { width:18px; height:18px; }
+    .hud-row { gap:4px; }
+  }
   #progressWrap { position:relative; height:26px; border-radius:999px;
     background:rgba(0,0,0,.28); border:2px solid rgba(255,255,255,.22);
     overflow:hidden; box-shadow:inset 0 2px 6px rgba(0,0,0,.3); }
@@ -165,6 +172,14 @@
       <button class="icon-btn" id="muteBtn" aria-label="Toggle sound">
         <svg id="sndOn" viewBox="0 0 24 24" fill="currentColor"><path d="M3 10v4a1 1 0 0 0 1 1h3l4.3 3.7A1 1 0 0 0 13 18V6a1 1 0 0 0-1.7-.7L7 9H4a1 1 0 0 0-1 1z"/><path d="M16 8.5a5 5 0 0 1 0 7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
         <svg id="sndOff" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M3 10v4a1 1 0 0 0 1 1h3l4.3 3.7A1 1 0 0 0 13 18V6a1 1 0 0 0-1.7-.7L7 9H4a1 1 0 0 0-1 1z"/><path d="M16 9.5l5 5m0-5l-5 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+      </button>
+      <button class="icon-btn" id="musicBtn" aria-label="Toggle music">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M9 18V5l11-2v13"/>
+          <circle cx="6.5" cy="18" r="2.6" fill="currentColor" stroke="none"/>
+          <circle cx="17.5" cy="16" r="2.6" fill="currentColor" stroke="none"/>
+          <path id="musicSlash" d="M4 4l16 16" style="display:none"/>
+        </svg>
       </button>
       <button class="icon-btn" id="restartBtn" aria-label="Restart level">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3.5 8a9 9 0 1 1-1 6"/><path d="M3 3v5h5"/></svg>
@@ -269,36 +284,157 @@ let best = JSON.parse(localStorage.getItem('prismpop_best') || '{"level":1,"scor
 
 const PRAISE = ['Nice!', 'Great!', 'Amazing!', 'Spectacular!', 'Unstoppable!'];
 
-// ---------- Audio (tiny synth, no assets) ----------
-let AC = null, muted = localStorage.getItem('prismpop_muted') === '1';
+// ---------- Audio engine (fully synthesized — no asset files) ----------
+let AC = null, master = null, sfxBus = null, musicBus = null, noiseBuf = null;
+let muted = localStorage.getItem('prismpop_muted') === '1';
+let musicOn = localStorage.getItem('prismpop_music') !== '0';
+
 function audio() {
-  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){} }
-  if (AC && AC.state === 'suspended') AC.resume();
+  if (!AC) {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return null;
+    AC = new Ctor();
+    const comp = AC.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.ratio.value = 8;
+    master = AC.createGain(); master.gain.value = muted ? 0 : 1;
+    master.connect(comp); comp.connect(AC.destination);
+    sfxBus = AC.createGain(); sfxBus.gain.value = 1; sfxBus.connect(master);
+    musicBus = AC.createGain(); musicBus.gain.value = musicOn ? 0.5 : 0; musicBus.connect(master);
+    noiseBuf = AC.createBuffer(1, AC.sampleRate / 2 | 0, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  if (AC.state === 'suspended') AC.resume();
   return AC;
 }
-function beep(freq, dur=0.12, type='sine', vol=0.18, slide=0) {
-  if (muted) return;
-  const ac = audio(); if (!ac) return;
+
+function tone(freq, { dur = .2, type = 'sine', vol = .2, when = 0, slide = 0, attack = .004, bus } = {}) {
+  const ac = audio(); if (!ac || muted) return;
+  const t0 = ac.currentTime + when;
   const o = ac.createOscillator(), g = ac.createGain();
-  o.type = type; o.frequency.setValueAtTime(freq, ac.currentTime);
-  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), ac.currentTime + dur);
-  g.gain.setValueAtTime(vol, ac.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
-  o.connect(g); g.connect(ac.destination);
-  o.start(); o.stop(ac.currentTime + dur + 0.02);
+  o.type = type; o.frequency.setValueAtTime(freq, t0);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(bus || sfxBus);
+  o.start(t0); o.stop(t0 + dur + .05);
 }
+
+function noiseHit({ dur = .15, vol = .2, when = 0, freq = 1800, q = 1, slide = 0, bus } = {}) {
+  const ac = audio(); if (!ac || muted) return;
+  const t0 = ac.currentTime + when;
+  const src = ac.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+  const f = ac.createBiquadFilter(); f.type = 'bandpass';
+  f.frequency.setValueAtTime(freq, t0); f.Q.value = q;
+  if (slide) f.frequency.exponentialRampToValueAtTime(Math.max(60, freq + slide), t0 + dur);
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + .006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(f); f.connect(g); g.connect(bus || sfxBus);
+  src.start(t0); src.stop(t0 + dur + .05);
+}
+
+// marimba-style pluck — the signature "pop" voice
+function pluck(freq, { when = 0, vol = .25, dur = .45, bus } = {}) {
+  tone(freq,        { dur,          vol,            when, type: 'sine', bus });
+  tone(freq * 3.97, { dur: dur * .3,  vol: vol * .22, when, type: 'sine', bus });
+  tone(freq * 9.1,  { dur: dur * .12, vol: vol * .08, when, type: 'sine', bus });
+}
+function bellTone(freq, { when = 0, vol = .2, dur = .8, bus } = {}) {
+  tone(freq,        { dur,           vol,            when, bus });
+  tone(freq * 2.76, { dur: dur * .6,  vol: vol * .35, when, bus });
+  tone(freq * 5.4,  { dur: dur * .25, vol: vol * .12, when, bus });
+}
+
+// pentatonic ladder — cascades climb it so combos sound musical
+const SCALE = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.5, 1567.98];
+
 const sfx = {
-  swap:   () => beep(300, .09, 'triangle', .12, 140),
-  bad:    () => beep(180, .15, 'sawtooth', .08, -60),
-  pop:    (chain) => beep(380 + Math.min(chain,8)*70, .12, 'sine', .2, 160),
-  line:   () => { beep(220, .25, 'sawtooth', .12, 500); },
-  bomb:   () => { beep(110, .3, 'square', .16, -40); beep(70, .35, 'sine', .2, -20); },
-  rainbow:() => { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,.18,'sine',.14),i*70)); },
-  win:    () => { [523,659,784,1047,1319].forEach((f,i)=>setTimeout(()=>beep(f,.25,'triangle',.16),i*120)); },
-  lose:   () => { [392,330,262,196].forEach((f,i)=>setTimeout(()=>beep(f,.3,'sine',.12),i*160)); },
-  spawn:  () => beep(700, .1, 'sine', .12, 300),
+  select: () => tone(900, { dur: .06, vol: .07, type: 'triangle' }),
+  swap:   () => { noiseHit({ dur: .12, vol: .12, freq: 900, slide: 1600, q: 2 });
+                  tone(420, { dur: .08, vol: .06, type: 'triangle', slide: 160 }); },
+  bad:    () => { tone(160, { dur: .16, vol: .12, type: 'square', slide: -50 });
+                  tone(110, { dur: .2, vol: .1, type: 'sine', slide: -30, when: .02 }); },
+  pop:    (chain = 1) => {
+            const f = SCALE[Math.min(chain - 1, SCALE.length - 1)];
+            pluck(f, { vol: .3 });
+            pluck(f * 2, { vol: .08, when: .02 });
+            noiseHit({ dur: .07, vol: .14, freq: 2600, q: .8 }); },
+  line:   () => { noiseHit({ dur: .3, vol: .2, freq: 600, slide: 3400, q: 3 });
+                  tone(300, { dur: .28, vol: .14, type: 'sawtooth', slide: 900 }); },
+  bomb:   () => { tone(140, { dur: .4, vol: .3, type: 'sine', slide: -90 });
+                  noiseHit({ dur: .35, vol: .25, freq: 300, q: .6, slide: -180 });
+                  tone(70, { dur: .5, vol: .22, type: 'sine', slide: -25, when: .04 }); },
+  rainbow:() => { for (let i = 0; i < 8; i++) pluck(SCALE[i], { when: i * .045, vol: .18 });
+                  noiseHit({ dur: .5, vol: .1, freq: 1200, slide: 2800, q: 2 }); },
+  spawn:  () => bellTone(1318.5, { vol: .16, dur: .5 }),
+  shuffle:() => { for (let i = 0; i < 6; i++) noiseHit({ dur: .05, vol: .08, when: i * .05, freq: 1500 + i * 300, q: 3 }); },
+  win:    () => { [523.25, 659.25, 783.99, 1046.5, 1318.5, 1567.98]
+                    .forEach((f, i) => pluck(f, { when: i * .11, vol: .25, dur: .5 }));
+                  [523.25, 659.25, 783.99].forEach(f => tone(f, { when: .66, dur: 1.1, vol: .1, type: 'triangle' })); },
+  lose:   () => { [392, 349.23, 311.13, 261.63].forEach((f, i) => tone(f, { when: i * .17, dur: .3, vol: .12, type: 'triangle' }));
+                  tone(130.8, { when: .68, dur: .7, vol: .1, type: 'sine', slide: -20 }); },
 };
 function buzz(ms){ if (navigator.vibrate && !muted) { try{ navigator.vibrate(ms); }catch(e){} } }
+
+// deep announcer voice for big combos
+function say(word){
+  if (muted || !('speechSynthesis' in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(word);
+    u.rate = 0.85; u.pitch = 0.1; u.volume = 1;
+    speechSynthesis.speak(u);
+  } catch(e){}
+}
+
+// ---------- Background music (gentle marimba loop, C–Am–F–G) ----------
+const BPM = 104, EIGHTH = 60 / BPM / 2;
+const CHORDS = [
+  [261.63, 329.63, 392.00, 523.25],   // C
+  [220.00, 261.63, 329.63, 440.00],   // Am
+  [174.61, 220.00, 261.63, 349.23],   // F
+  [196.00, 246.94, 293.66, 392.00],   // G
+];
+const ARP = [0, 1, 2, 3, 2, 3, 1, 2];
+let musicTimer = null, musicStep = 0, musicNextT = 0;
+function scheduleMusic(){
+  if (!AC) return;
+  while (musicNextT < AC.currentTime + 0.25){
+    const bar = Math.floor(musicStep / 8) % CHORDS.length;
+    const step = musicStep % 8;
+    const chord = CHORDS[bar];
+    const when = musicNextT - AC.currentTime;
+    if (!muted && musicOn){
+      if (step === 0) tone(chord[0] / 2, { dur: EIGHTH * 7, vol: .12, type: 'triangle', when, bus: musicBus });
+      if (step === 4) tone(chord[0] * .75, { dur: EIGHTH * 3, vol: .08, type: 'triangle', when, bus: musicBus });
+      pluck(chord[ARP[step]] * 2, { when, vol: .10, dur: .3, bus: musicBus });
+      if (step === 6 && bar === 3) bellTone(chord[3] * 2, { when, vol: .05, bus: musicBus });
+    }
+    musicStep++; musicNextT += EIGHTH;
+  }
+}
+function startMusic(){
+  const ac = audio(); if (!ac || musicTimer) return;
+  musicStep = 0; musicNextT = ac.currentTime + 0.1;
+  musicTimer = setInterval(scheduleMusic, 100);
+}
+
+// mobile browsers require a user gesture before audio can play
+function unlockAudio(){
+  const ac = audio(); if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain();
+  g.gain.value = 0.001; o.connect(g); g.connect(ac.destination);
+  o.start(); o.stop(ac.currentTime + 0.03);
+  startMusic();
+}
+['pointerdown', 'touchend', 'click'].forEach(ev =>
+  document.addEventListener(ev, unlockAudio, { once: true }));
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && AC && AC.state === 'suspended') AC.resume();
+});
 
 // ---------- Helpers ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -564,6 +700,7 @@ async function shuffleBoard(animate=true){
   } while ((findRuns().length > 0 || !hasMove()) && guard < 60);
   if (animate){
     showToast('Shuffling…');
+    sfx.shuffle();
     const proms = [];
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
       const g = board[r][c]; if (!g) continue;
@@ -648,7 +785,11 @@ async function popCells(cellKeys, chain){
   const cx = gems.reduce((s,o)=>s+o.g.x,0)/gems.length;
   const cy = gems.reduce((s,o)=>s+o.g.y,0)/gems.length;
   addFloater(cx, cy, '+' + pts, gems.length >= 6);
-  if (chain >= 2) addFloater(cx, cy - cell*0.8, PRAISE[Math.min(chain-2, PRAISE.length-1)], true);
+  if (chain >= 2){
+    const word = PRAISE[Math.min(chain-2, PRAISE.length-1)];
+    addFloater(cx, cy - cell*0.8, word, true);
+    if (chain >= 3) say(word);
+  }
   updateHud();
 
   // pop animation
@@ -890,7 +1031,7 @@ cv.addEventListener('pointerup', e => {
     selected = null;
   } else {
     selected = p;
-    beep(520, .06, 'sine', .08, 80);
+    sfx.select();
   }
 });
 cv.addEventListener('pointercancel', () => { pdown = null; });
@@ -1077,13 +1218,15 @@ function startLevel(l){
 }
 
 // ---------- Buttons ----------
-document.getElementById('playBtn').addEventListener('click', () => { audio(); startLevel(best.level > 1 ? best.level : 1); });
+document.getElementById('playBtn').addEventListener('click', () => { audio(); startMusic(); startLevel(best.level > 1 ? best.level : 1); });
 document.getElementById('nextBtn').addEventListener('click', () => startLevel(level + 1));
 document.getElementById('retryBtn').addEventListener('click', () => startLevel(level));
 document.getElementById('restartBtn').addEventListener('click', () => { if (!busy) startLevel(level); });
 document.getElementById('muteBtn').addEventListener('click', () => {
   muted = !muted;
   localStorage.setItem('prismpop_muted', muted ? '1' : '0');
+  if (master) master.gain.value = muted ? 0 : 1;
+  if (muted && 'speechSynthesis' in window) { try{ speechSynthesis.cancel(); }catch(e){} }
   document.getElementById('sndOn').style.display = muted ? 'none' : '';
   document.getElementById('sndOff').style.display = muted ? '' : 'none';
 });
@@ -1091,6 +1234,14 @@ if (muted){
   document.getElementById('sndOn').style.display = 'none';
   document.getElementById('sndOff').style.display = '';
 }
+document.getElementById('musicBtn').addEventListener('click', () => {
+  musicOn = !musicOn;
+  localStorage.setItem('prismpop_music', musicOn ? '1' : '0');
+  if (musicBus) musicBus.gain.value = musicOn ? 0.5 : 0;
+  if (musicOn) startMusic();
+  document.getElementById('musicSlash').style.display = musicOn ? 'none' : '';
+});
+if (!musicOn) document.getElementById('musicSlash').style.display = '';
 const bl = document.getElementById('bestLabel');
 if (best.level > 1) bl.textContent = `★ Best: Level ${best.level}`;
 
