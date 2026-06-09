@@ -422,19 +422,51 @@ function startMusic(){
   musicTimer = setInterval(scheduleMusic, 100);
 }
 
-// mobile browsers require a user gesture before audio can play
+// iOS: WebAudio is silenced by the ring/silent switch unless the page is
+// also "playing" media. Looping a silent <audio> element moves the audio
+// session to playback mode, which ignores the mute switch.
+let unlockEl = null;
+function silentWavURL(){
+  const sampleRate = 8000, samples = sampleRate / 2;
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const wr = (off, str) => { for (let i = 0; i < str.length; i++) v.setUint8(off + i, str.charCodeAt(i)); };
+  wr(0, 'RIFF'); v.setUint32(4, 36 + samples * 2, true); wr(8, 'WAVE');
+  wr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  wr(36, 'data'); v.setUint32(40, samples * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+// runs on every gesture: resume the context and keep the media session alive
 function unlockAudio(){
   const ac = audio(); if (!ac) return;
-  const o = ac.createOscillator(), g = ac.createGain();
-  g.gain.value = 0.001; o.connect(g); g.connect(ac.destination);
-  o.start(); o.stop(ac.currentTime + 0.03);
+  if (ac.state !== 'running') { try{ ac.resume(); }catch(e){} }
+  if (!unlockEl){
+    try {
+      unlockEl = document.createElement('audio');
+      unlockEl.setAttribute('playsinline', '');
+      unlockEl.loop = true;
+      unlockEl.src = silentWavURL();
+      unlockEl.play().catch(() => { unlockEl = null; });
+    } catch(e){ unlockEl = null; }
+  } else if (unlockEl.paused){
+    unlockEl.play().catch(() => {});
+  }
   startMusic();
 }
 ['pointerdown', 'touchend', 'click'].forEach(ev =>
-  document.addEventListener(ev, unlockAudio, { once: true }));
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && AC && AC.state === 'suspended') AC.resume();
-});
+  document.addEventListener(ev, unlockAudio, true));
+
+// recover audio when returning to the tab/app
+function recoverAudio(){
+  if (AC && AC.state !== 'running') { try{ AC.resume(); }catch(e){} }
+  if (unlockEl && unlockEl.paused) unlockEl.play().catch(() => {});
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) recoverAudio(); });
+window.addEventListener('pageshow', recoverAudio);
+window.addEventListener('focus', recoverAudio);
 
 // ---------- Helpers ----------
 const sleep = ms => new Promise(r => setTimeout(r, ms));
